@@ -15,6 +15,7 @@
 #include "alpm/util.h"
 #include "alpm/base64.h"
 #include "database.h"
+#include "util.h"
 
 #define NOCOLOR     "\033[0m"
 #define BOLD        "\033[1m"
@@ -35,36 +36,7 @@
 #define BOLDMAGENTA "\033[1;35m"
 #define BOLDCYAN    "\033[1;36m"
 
-enum action {
-    ACTION_VERIFY,
-    ACTION_UPDATE,
-    ACTION_REMOVE,
-    ACTION_QUERY,
-    INVALID_ACTION
-};
-
-typedef struct colstr {
-    const char *colon;
-    const char *warn;
-    const char *error;
-    const char *nocolor;
-} colstr_t;
-
-static struct {
-    const char *key;
-    const char *arch;
-    char *pool;
-    enum action action;
-
-    short clean;
-    bool info;
-    bool sign;
-    bool files;
-    bool rebuild;
-
-    bool color;
-    colstr_t colstr;
-} cfg = {
+config_t cfg = {
     .action = INVALID_ACTION,
     .colstr = {
         .colon   = ":: ",
@@ -73,31 +45,6 @@ static struct {
         .nocolor = ""
     }
 };
-
-static void safe_asprintf(char **strp, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    if (vasprintf(strp, fmt, ap) < 0)
-        err(EXIT_FAILURE, "failed to allocate memory");
-    va_end(ap);
-}
-
-static int colon_printf(const char *fmt, ...)
-{
-    int ret;
-    va_list args;
-
-    va_start(args, fmt);
-    fputs(cfg.colstr.colon, stdout);
-    ret = vprintf(fmt, args);
-    fputs(cfg.colstr.nocolor, stdout);
-    va_end(args);
-
-    fflush(stdout);
-    return ret;
-}
 
 static void alloc_pkghash(repo_t *repo)
 {
@@ -231,7 +178,7 @@ static repo_t *repo_new(char *path)
     return repo;
 }
 
-static int repo_write(repo_t *repo)
+int repo_write(repo_t *repo)
 {
     switch (repo->state) {
     case REPO_NEW:
@@ -264,7 +211,7 @@ static int repo_write(repo_t *repo)
     return 0;
 }
 
-static int unlink_package(repo_t *repo, const alpm_pkg_meta_t *pkg)
+int unlink_package(repo_t *repo, const alpm_pkg_meta_t *pkg)
 {
     if (faccessat(repo->poolfd, pkg->filename, F_OK, 0) < 0) {
         if (errno != ENOENT) {
@@ -348,36 +295,6 @@ static inline alpm_pkghash_t *pkgcache_from_file(alpm_pkghash_t *cache, repo_t *
     return pkgcache_add(cache, pkg);
 }
 
-static bool match_target_r(alpm_pkg_meta_t *pkg, const char *target, char **buf)
-{
-    if (strcmp(target, pkg->filename) == 0)
-        return true;
-    else if (strcmp(target, pkg->name) == 0)
-        return true;
-
-    /* since this may be called multiple times, buf is external to avoid
-     * recalculating it each time. */
-    if (*buf == NULL)
-        safe_asprintf(buf, "%s-%s", pkg->name, pkg->version);
-
-    if (fnmatch(target, *buf, 0) == 0)
-        return true;
-    return false;
-}
-
-static bool match_targets(alpm_pkg_meta_t *pkg, alpm_list_t *targets)
-{
-    bool ret = false;
-    char *buf = NULL;
-    const alpm_list_t *node;
-
-    for (node = targets; node && !ret; node = node->next)
-        ret = match_target_r(pkg, node->data, &buf);
-
-    free(buf);
-    return ret;
-}
-
 static alpm_pkghash_t *scan_for_targets(alpm_pkghash_t *cache, repo_t *repo, alpm_list_t *targets)
 {
     DIR *dir = opendir(repo->pool);
@@ -406,7 +323,7 @@ static alpm_pkghash_t *scan_for_targets(alpm_pkghash_t *cache, repo_t *repo, alp
     return cache;
 }
 
-static alpm_pkghash_t *get_filecache(repo_t *repo, int argc, char *argv[])
+alpm_pkghash_t *get_filecache(repo_t *repo, int argc, char *argv[])
 {
     alpm_pkghash_t *cache = _alpm_pkghash_create(argc ? argc : repo->cachesize);
 
@@ -433,260 +350,6 @@ static alpm_pkghash_t *get_filecache(repo_t *repo, int argc, char *argv[])
 
     return cache;
 }
-
-/* {{{ VERIFY */
-static int verify_pkg_sig(repo_t *repo, const alpm_pkg_meta_t *pkg)
-{
-    int pkgfd, sigfd = openat(repo->poolfd, pkg->signame, O_RDONLY);
-    if (sigfd < 0) {
-        if (errno == ENOENT)
-            return -1;
-        err(EXIT_FAILURE, "failed to open %s", pkg->signame);
-    }
-
-    pkgfd = openat(repo->poolfd, pkg->filename, O_RDONLY);
-    if (pkgfd < 0) {
-        err(EXIT_FAILURE, "failed to open %s", pkg->filename);
-    }
-
-    int rc = gpgme_verify(pkgfd, sigfd);
-    close(pkgfd);
-    close(sigfd);
-    return rc;
-}
-
-static int verify_pkg(repo_t *repo, const alpm_pkg_meta_t *pkg)
-{
-    if (faccessat(repo->poolfd, pkg->filename, F_OK, 0) < 0) {
-        warn("couldn't find pkg %s at %s", pkg->name, pkg->filename);
-        return 1;
-    }
-
-    /* if we have a signature, verify it */
-    if (verify_pkg_sig(repo, pkg) < 0) {
-        warnx("package %s, signature is invalid or corrupt!", pkg->name);
-        return 1;
-    }
-
-    /* if we have a md5sum, verify it */
-    if (pkg->md5sum) {
-        char *md5sum = _compute_md5sum(repo->poolfd, pkg->filename);
-        if (strcmp(pkg->md5sum, md5sum) != 0) {
-            warnx("md5 sum for pkg %s is different", pkg->name);
-            return 1;
-        }
-        free(md5sum);
-    }
-
-    /* if we have a sha256sum, verify it */
-    if (pkg->sha256sum) {
-        char *sha256sum = _compute_sha256sum(repo->poolfd, pkg->filename);
-        if (strcmp(pkg->sha256sum, sha256sum) != 0) {
-            warnx("sha256 sum for pkg %s is different", pkg->name);
-            return 1;
-        }
-        free(sha256sum);
-    }
-
-    return 0;
-}
-
-static int repo_database_verify(repo_t *repo)
-{
-    alpm_list_t *node;
-    int rc = 0;
-
-    if (repo->state != REPO_NEW)
-        return 0;
-
-    for (node = repo->pkgcache->list; node; node = node->next) {
-        alpm_pkg_meta_t *pkg = node->data;
-        rc |= verify_pkg(repo, pkg);
-    }
-
-    if (rc == 0)
-        printf("repo okay!\n");
-
-    return rc;
-}
-/* }}} */
-
-/* {{{ UPDATE */
-static inline alpm_pkghash_t *_alpm_pkghash_replace(alpm_pkghash_t *cache, alpm_pkg_meta_t *new,
-                                                    alpm_pkg_meta_t *old)
-{
-    cache = _alpm_pkghash_remove(cache, old, NULL);
-    return _alpm_pkghash_add(cache, new);
-}
-
-/* read the existing repo or construct a new package cache */
-static int repo_database_update(repo_t *repo, int argc, char *argv[])
-{
-    alpm_list_t *node, *pkgs;
-    bool force = argc > 0 ? true : false;
-
-    if (repo->state == REPO_NEW)
-        warnx("repo doesn't exist, creating...");
-
-    alpm_pkghash_t *filecache = get_filecache(repo, argc, argv);
-    pkgs = filecache->list;
-
-    colon_printf("Updating repo database...\n");
-    for (node = pkgs; node; node = node->next) {
-        alpm_pkg_meta_t *pkg = node->data;
-        alpm_pkg_meta_t *old = _alpm_pkghash_find(repo->pkgcache, pkg->name);
-        int vercmp;
-
-        /* if the package isn't in the cache, add it */
-        if (!old) {
-            printf("adding %s %s\n", pkg->name, pkg->version);
-            repo->pkgcache = _alpm_pkghash_add(repo->pkgcache, pkg);
-            repo->state = REPO_DIRTY;
-            continue;
-        }
-
-        vercmp = alpm_pkg_vercmp(pkg->version, old->version);
-
-        /* if the package is in the cache, but we're doing a forced
-         * update, replace it anywaysj*/
-        if (force) {
-            printf("replacing %s %s => %s\n", pkg->name, old->version, pkg->version);
-            repo->pkgcache = _alpm_pkghash_replace(repo->pkgcache, pkg, old);
-            if ((vercmp == -1 && cfg.clean >= 1) || (vercmp == 1 && cfg.clean >= 2))
-                unlink_package(repo, old);
-            alpm_pkg_free_metadata(old);
-            repo->state = REPO_DIRTY;
-            continue;
-        }
-
-        /* if the package is in the cache and we have a newer version,
-         * replace it */
-        switch(vercmp) {
-        case 1:
-            printf("updating %s %s => %s\n", pkg->name, old->version, pkg->version);
-            repo->pkgcache = _alpm_pkghash_replace(repo->pkgcache, pkg, old);
-            if (cfg.clean >= 1)
-                unlink_package(repo, old);
-            alpm_pkg_free_metadata(old);
-            repo->state = REPO_DIRTY;
-            break;
-        case 0:
-            /* XXX: REFACTOR */
-            if (pkg->builddate > old->builddate) {
-                printf("updating %s %s [newer build]\n", pkg->name, pkg->version);
-                repo->pkgcache = _alpm_pkghash_replace(repo->pkgcache, pkg, old);
-                alpm_pkg_free_metadata(old);
-                repo->state = REPO_DIRTY;
-            } else if (old->base64_sig == NULL && pkg->base64_sig) {
-                /* check to see if the package now has a signature */
-                printf("adding signature for %s\n", pkg->name);
-                repo->pkgcache = _alpm_pkghash_replace(repo->pkgcache, pkg, old);
-                alpm_pkg_free_metadata(old);
-                repo->state = REPO_DIRTY;
-            }
-            break;
-        case -1:
-            if (cfg.clean >= 2) {
-                unlink_package(repo, pkg);
-            }
-        }
-
-    }
-
-    return repo_write(repo);
-}
-/* }}} */
-
-/* {{{ REMOVE */
-static alpm_list_t *glob_cache(alpm_pkghash_t *pkgcache, const char *target)
-{
-    alpm_list_t *ret = NULL;
-    char *buf = NULL;
-    const alpm_list_t *node;
-
-    for (node = pkgcache->list; node; node = node->next) {
-        if (match_target_r(node->data, target, &buf))
-            ret = alpm_list_add(ret, node->data);
-    }
-
-    free(buf);
-    return ret;
-}
-
-static int repo_database_remove(repo_t *repo, int argc, char *argv[])
-{
-    if (repo->state == REPO_NEW) {
-        warnx("repo doesn't exist...");
-        return 1;
-    } else if (argc == 0) {
-        return 0;
-    }
-
-    int i;
-    for (i = 0; i < argc; ++i) {
-        alpm_list_t *node, *pkgs = glob_cache(repo->pkgcache, argv[i]);
-
-        if (!pkgs)
-            warnx("didn't find entry: %s", argv[0]);
-
-        for (node = pkgs; node; node = node->next) {
-            alpm_pkg_meta_t *pkg = node->data;
-
-            printf("removing %s %s\n", pkg->name, pkg->version);
-            repo->pkgcache = _alpm_pkghash_remove(repo->pkgcache, pkg, NULL);
-            if (cfg.clean >= 1)
-                unlink_package(repo, pkg);
-            alpm_pkg_free_metadata(pkg);
-            repo->state = REPO_DIRTY;
-        }
-    }
-
-    return repo_write(repo);
-}
-
-/* }}} */
-
-/* {{{ QUERY */
-static void print_metadata(const alpm_pkg_meta_t *pkg)
-{
-    if (cfg.info) {
-        printf("Filename     : %s\n", pkg->filename);
-        printf("Name         : %s\n", pkg->name);
-        printf("Version      : %s\n", pkg->version);
-        printf("Description  : %s\n", pkg->desc);
-        printf("Architecture : %s\n", pkg->arch);
-        printf("URL          : %s\n", pkg->url);
-        printf("Packager     : %s\n\n", pkg->packager);
-    } else {
-        printf("%s %s\n", pkg->name, pkg->version);
-    }
-}
-
-/* read the existing repo or construct a new package cache */
-static int repo_database_query(repo_t *repo, int argc, char *argv[])
-{
-    if (repo->state == REPO_NEW)
-        return 0;
-
-    if (argc > 0) {
-        int i;
-        for (i = 0; i < argc; ++i) {
-            const alpm_pkg_meta_t *pkg = _alpm_pkghash_find(repo->pkgcache, argv[i]);
-            if (pkg == NULL) {
-                warnx("pkg not found");
-                return 1;
-            }
-            print_metadata(pkg);
-        }
-    } else {
-        alpm_list_t *node, *pkgs = repo->pkgcache->list;
-        for (node = pkgs; node; node = node->next)
-            print_metadata(node->data);
-    }
-
-    return 0;
-}
-/* }}} */
 
 /* {{{ COMPAT! */
 #include "repo-compat.c"
