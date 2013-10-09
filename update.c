@@ -1,19 +1,10 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
-#include <getopt.h>
-#include <fcntl.h>
 #include <err.h>
-#include <errno.h>
-#include <dirent.h>
-#include <fnmatch.h>
-#include <sys/utsname.h>
 
-#include "alpm/signing.h"
-#include "alpm/util.h"
-#include "alpm/base64.h"
-#include "database.h"
+#include "repose.h"
 #include "util.h"
+#include "alpm/alpm_metadata.h"
 
 static inline alpm_pkghash_t *_alpm_pkghash_replace(alpm_pkghash_t *cache, alpm_pkg_meta_t *new,
                                                     alpm_pkg_meta_t *old)

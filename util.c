@@ -1,21 +1,12 @@
-#include "util.h"
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <getopt.h>
-#include <fcntl.h>
 #include <err.h>
-#include <errno.h>
-#include <dirent.h>
 #include <fnmatch.h>
-#include <sys/utsname.h>
 
-#include "alpm/signing.h"
-#include "alpm/util.h"
-#include "alpm/base64.h"
-#include "database.h"
+#include "repose.h"
 #include "util.h"
+#include "alpm/alpm_metadata.h"
 
 void safe_asprintf(char **strp, const char *fmt, ...)
 {
