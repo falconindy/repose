@@ -232,9 +232,6 @@ void sign_database(repo_t *repo, file_t *db, const char *key)
 
     close(sigfd);
     close(dbfd);
-
-    if (symlinkat(db->sig, repo->rootfd, db->link_sig) < 0 && errno != EEXIST)
-        err(EXIT_FAILURE, "symlink for %s failed", db->link_sig);
 }
 
 void compile_database(repo_t *repo, file_t *db, int contents)
@@ -248,10 +245,6 @@ void compile_database(repo_t *repo, file_t *db, int contents)
     }
 
     db_writer_close(writer);
-
-    /* make the appropriate symlink for the database */
-    if (symlinkat(db->file, repo->rootfd, db->link_file) < 0 && errno != EEXIST)
-        err(EXIT_FAILURE, "symlink for %s failed", db->link_file);
 }
 
 int load_database(repo_t *repo, file_t *db)

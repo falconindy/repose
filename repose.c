@@ -120,15 +120,11 @@ static void populate_db_files(file_t *db, const char *name, const char *base, co
 {
     /* precompile some filepaths:
      *  - db full filename
-     *  - link to db file
      *  - db signature
-     *  - link to signature
      */
 
     safe_asprintf(&db->file, "%s.%s%s", name, base, ext);
     safe_asprintf(&db->sig, "%s.%s%s.sig", name, base, ext);
-    safe_asprintf(&db->link_file, "%s.%s", name, base);
-    safe_asprintf(&db->link_sig, "%s.%s.sig", name, base);
 }
 
 static repo_t *repo_new(char *path)
@@ -165,24 +161,6 @@ static repo_t *repo_new(char *path)
         repo->root = get_current_dir_name();
     }
 
-    if (!dot) {
-        errx(EXIT_FAILURE, "no file extension");
-    } else if (strcmp(dot, ".db") == 0) {
-        repo->compression = cfg.compression;
-    } else if (strcmp(dot, ".db.tar") == 0) {
-        repo->compression = COMPRESS_NONE;
-    } else if (strcmp(dot, ".db.tar.gz") == 0) {
-        repo->compression = COMPRESS_GZIP;
-    } else if (strcmp(dot, ".db.tar.bz2") == 0) {
-        repo->compression = COMPRESS_BZIP2;
-    } else if (strcmp(dot, ".db.tar.xz") == 0) {
-        repo->compression = COMPRESS_XZ;
-    } else if (strcmp(dot, ".db.tar.Z") == 0) {
-        repo->compression = COMPRESS_COMPRESS;
-    } else {
-        errx(EXIT_FAILURE, "%s invalid repo type", dot);
-    }
-
     /* open the directory so we can use openat later */
     repo->rootfd = open(repo->root, O_RDONLY);
     if (repo->poolfd < 0)
@@ -201,25 +179,7 @@ static repo_t *repo_new(char *path)
 
     /* skip '.db' */
     dot += 3;
-    if (*dot == '\0') {
-        switch (repo->compression) {
-        case COMPRESS_NONE:
-            dot = ".tar";
-            break;
-        case COMPRESS_GZIP:
-            dot = ".tar.gz";
-            break;
-        case COMPRESS_BZIP2:
-            dot = ".tar.bz2";
-            break;
-        case COMPRESS_XZ:
-            dot = ".tar.xz";
-            break;
-        case COMPRESS_COMPRESS:
-            dot = ".tar.Z";
-            break;
-        }
-    }
+    repo->compression = cfg.compression;
 
     populate_db_files(&repo->db, name, "db", dot);
     if (cfg.files)

@@ -19,8 +19,8 @@ enum compress {
 };
 
 typedef struct file {
-    char *file, *link_file;
-    char *sig,  *link_sig;
+    char *file;
+    char *sig;
 } file_t;
 
 typedef struct repo {
